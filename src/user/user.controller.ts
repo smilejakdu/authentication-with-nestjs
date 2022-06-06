@@ -2,19 +2,26 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Post,
+  Req,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { UserService } from './user.service';
 import * as bcryptjs from 'bcryptjs';
 import { JwtService } from '@nestjs/jwt';
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import { TokenService } from './token.service';
+import { MoreThanOrEqual } from 'typeorm';
+import { request } from 'http';
 
 @Controller('api')
 export class UserController {
   constructor(
     private userService: UserService,
     private jwtService: JwtService,
+    private tokenService: TokenService,
   ) {}
 
   @Post('register')
@@ -35,7 +42,7 @@ export class UserController {
   async login(
     @Body('email') email: string,
     @Body('password') password: string,
-    @Res({passthrough: true}) response: Response,
+    @Res({ passthrough: true }) response: Response,
   ) {
     const user = await this.userService.findOne({ email });
 
@@ -58,6 +65,16 @@ export class UserController {
       id: user.id,
     });
 
+    const expired_at = new Date();
+    expired_at.setDate(expired_at.getDate() + 7);
+
+    await this.tokenService.save({
+      user_id: user.id,
+      token: refreshToken,
+      expired_at,
+    });
+
+    response.status(200);
     response.cookie('refresh_token', refreshToken, {
       httpOnly: true,
       maxAge: 7 * 24 * 60 * 60 * 1000, // 1 week
@@ -65,6 +82,68 @@ export class UserController {
 
     return {
       token: accessToken,
+    };
+  }
+
+  @Get('user')
+  async user(@Req() request: Request) {
+    try {
+      const accessToken = request.headers.authorization.replace('Bearer ', '');
+
+      const { id } = await this.jwtService.verifyAsync(accessToken);
+
+      const { password, ...data } = await this.userService.findOne({ id });
+
+      return data;
+    } catch (e) {
+      throw new UnauthorizedException();
+    }
+  }
+
+  @Post('refresh')
+  async refresh(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    try {
+      const refreshToken = request.cookies['refresh_token'];
+
+      const { id } = await this.jwtService.verifyAsync(refreshToken);
+
+      const tokenEntity = await this.tokenService.findOne({
+        user_id: id,
+        expired_at: MoreThanOrEqual(new Date()),
+      });
+
+      if (!tokenEntity) {
+        throw new UnauthorizedException();
+      }
+
+      const accessToken = await this.jwtService.signAsync(
+        { id },
+        { expiresIn: '30s' },
+      );
+
+      response.status(200);
+      return {
+        accessToken,
+      };
+    } catch (e) {
+      throw new UnauthorizedException();
+    }
+  }
+
+  @Post('logout')
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    await this.tokenService.delete({ token: request.cookies['refresh_token']});
+
+    response.clearCookie('refresh_token');
+
+    return {
+      message: 'success',
     };
   }
 }

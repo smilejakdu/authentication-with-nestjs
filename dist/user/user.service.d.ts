@@ -5,4 +5,5 @@ export declare class UserService {
     constructor(userRepository: Repository<UserEntity>);
     save(body: any): Promise<any>;
     findOne(options: any): Promise<UserEntity>;
+    update(id: number, options: any): Promise<import("typeorm").UpdateResult>;
 }
